@@ -23,6 +23,36 @@ Ext.define('CustomApp', {
 		app.queryIterations();
 	},
 
+	getSettingsFields: function() {
+        var values = [
+            {
+                name: 'commitAcceptRatio',
+                xtype: 'rallytextfield',
+                label : "Target accepted .v. committed percent"
+            },
+            {
+                name: 'continuousImprovementRangeMin',
+                xtype: 'rallytextfield',
+                label: 'Continuous Improvement Range Min'
+            },
+            {
+                name: 'continuousImprovementRangeMax',
+                xtype: 'rallytextfield',
+                label: 'Continuous Improvement Range Max'
+            }
+
+        ];
+        return values;
+    },
+
+    config: {
+        defaultSettings : {
+            commitAcceptRatio : 75,
+            continuousImprovementRangeMin : 5,
+            continuousImprovementRangeMax : 10
+        }
+    },
+
 	/*
 		queryIteration retrieves all iterations in scope that ended before today and after one
 		year ago.
@@ -272,13 +302,14 @@ Ext.define('CustomApp', {
 		var data = _.map( value, function (v,i) {
 			var drec =  {
 				acceptedPercent : v.committed > 0 ? Math.round((v.accepted / v.committed) * 100) : 0,
+				targetPercent : app.getSetting("commitAcceptRatio"),
 				index : i+1
 			};
 			return drec;
 		});
 
 		record.chartStore = Ext.create('Ext.data.JsonStore', {
-			fields: ['index','acceptedPercent'],
+			fields: ['index','acceptedPercent','targetPercent'],
 			data: data
 		});
 
@@ -308,6 +339,22 @@ Ext.define('CustomApp', {
 					axis: 'left',
 					xField: 'index',
 					yField: 'acceptedPercent'
+				},
+				{
+					type: 'line',
+					style: {
+		                //stroke: "red"
+		                stroke: '#ff0000',
+		                fill: '#ff0000'
+		            },
+		            markerConfig: { 
+    	                type: 'circle',
+		                size: 1,
+                		radius: 1,
+					},
+					axis: 'left',
+					xField: 'index',
+					yField: 'targetPercent'
 				}
 			]
 		};
