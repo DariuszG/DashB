@@ -92,11 +92,10 @@ Ext.define('CustomApp', {
 				*/
 
 				async.map( teamLastIterations, app.teamData, function(error,results) {
-					console.log("teamData",results);
 					app.teamResults = _.map(results, function(result,i) {
 						return {
 							team : teams[i],
-							summary : results[i][0]
+							summary : _.merge(results[i][0],results[i][1],results[i][2])
 						};
 					});
 					// create the table with the summary data.
@@ -111,17 +110,92 @@ Ext.define('CustomApp', {
         Called for each team to return the iteration and improvements data records
     */
     teamData : function( iterations, callback) {
-
         app.iterationsData( iterations, function(x,iterationResults) {
             app.improvementsData( iterations,function(err,improvementResults) {
-                callback(null,[iterationResults,improvementResults]);
+            	app.allIterationItems( iterations, function(err,allIterationItems) {
+            		callback(null,[iterationResults,improvementResults,allIterationItems]);	
+            	})
             });
         });
+    },
 
+    allIterationItems : function( iterations, callback) {
+
+        var configs = _.map( iterations, function(iteration) {
+			return {
+				model  : "HierarchicalRequirement",
+				fetch  : ['ObjectID','PlanEstimate','Name','FormattedID','Project','ScheduleState'],
+				filters: [ {
+						property : 'Iteration.ObjectID',
+						operator: "=",
+						value: iteration.get("ObjectID")
+					}
+				]
+			};
+		});
+
+		async.map( configs, app.wsapiQuery, function(error,results) {
+			var allData = [];
+			_.each(results,function(allStories) {
+				var allIterationData = {
+					totalScope : _.reduce(allStories, function(memo,r) {
+						return memo + (r.get("PlanEstimate")!==null  ? r.get("PlanEstimate") : 0)
+					},0),
+					lateAccepted : _.reduce(allStories, function(memo,r) {
+						return memo + app.acceptedValue(r);
+					},0)
+				}
+				allData.push(allIterationData);
+			});				
+			callback(null,allData);
+		});
     },
 
     improvementsData : function( iterations, callback) {
-        // callback(null,[]);
+
+        var configs = _.map( iterations, function(iteration) {
+			return {
+				model  : "HierarchicalRequirement",
+				fetch  : ['ObjectID','PlanEstimate','Name','FormattedID','Project','ScheduleState'],
+				filters: [ {
+						property : 'Feature.Name',
+						operator: "contains",
+						value: 'Continuous Improvement'
+					},
+					{
+						property : 'Iteration.ObjectID',
+						operator: "=",
+						value: iteration.get("ObjectID")
+					},
+					{
+						property : 'ScheduleState',
+						operator: "=",
+						value: "Accepted"
+					}
+				]
+			};
+		});
+
+		async.map( configs, app.wsapiQuery, function(error,results) {
+			var allData = [];
+			_.each(results,function(result){
+				var improvementRec = {
+					totalImprovementPoints : _.reduce(result,function(memo,r){
+						return memo + app.acceptedValue(r);
+					},0)
+				}
+				allData.push(improvementRec);
+			});
+			
+			callback(null,allData);
+		});
+
+    },
+
+    acceptedValue : function(story) {
+		var accepted = story.get("ScheduleState") === "Accepted" || story.get("ScheduleState") == "Released";
+		var val = accepted && (story.get("PlanEstimate")!==null) ? story.get("PlanEstimate") : 0;
+		return val;
     },
 
 	/*
@@ -187,13 +261,14 @@ Ext.define('CustomApp', {
 			columnCfgs: [
 				{ text: 'Team', dataIndex: 'team' },
 				{ text: 'Last 4 Sprints', dataIndex: 'summary', renderer : app.renderSummaries, width : 200 },
-				{ text: 'Chart', dataIndex: 'summary', renderer : app.renderChart,width : 150, align : "center" }
+				{ text: '% Accepted Chart', dataIndex: 'summary', renderer : app.renderAcceptedChart,width : 150, align : "center" },
+				{ text: '% Improvement Chart', dataIndex: 'summary', renderer : app.renderImprovementChart,width : 150, align : "center" }
 			]
 		});
 		app.add(grid);
 	},
 
-	renderChart: function(value, metaData, record, rowIdx, colIdx, store, view) {
+	renderAcceptedChart: function(value, metaData, record, rowIdx, colIdx, store, view) {
 		var data = _.map( value, function (v,i) {
 			var drec =  {
 				acceptedPercent : v.committed > 0 ? Math.round((v.accepted / v.committed) * 100) : 0,
@@ -217,7 +292,7 @@ Ext.define('CustomApp', {
 				label: {
 					renderer: Ext.util.Format.numberRenderer('0,0')
 				},
-				grid: true,
+				grid: true
 			}, {
 				type: 'Category',
 				position: 'bottom',
@@ -249,6 +324,65 @@ Ext.define('CustomApp', {
 		var iteration = _.last(value).id;
 		var href = "https://rally1.rallydev.com/#/"+prj+"/oiterationstatus?iterationKey="+iteration;
 		return "<a id='" + id + "'href="+href+" target=_blank></a>";
+	},
+
+	renderImprovementChart: function(value, metaData, record, rowIdx, colIdx, store, view) {
+		var data = _.map( value, function (v,i) {
+			var drec =  {
+				improvementPercent : v.totalScope > 0 ? Math.round((v.totalImprovementPoints / v.totalScope) * 100) : 0,
+				index : i+1
+			};
+			return drec;
+		});
+
+		record.improvementChartStore = Ext.create('Ext.data.JsonStore', {
+			fields: ['index','improvementPercent'],
+			data: data
+		});
+
+		record.improvementChartConfig = {
+			width: 100,
+			height: 100,
+			axes: [{
+				type: 'Numeric',
+				position: 'left',
+				fields: ['improvementPercent'],
+				label: {
+					renderer: Ext.util.Format.numberRenderer('0,0')
+				},
+				grid: true
+			}, {
+				type: 'Category',
+				position: 'bottom',
+				fields: ['index']
+			}],
+			series: [
+				{
+					type: 'line',
+					highlight: {
+						size: 2,
+						radius: 2
+					},
+					axis: 'left',
+					xField: 'index',
+					yField: 'improvementPercent'
+				}
+			]
+		};
+
+		var id = Ext.id();
+		Ext.defer(function (id) {
+			record.improvementChartConfig.renderTo = id;
+			record.improvementChartConfig.store = record.improvementChartStore;
+			if (record.improvementChart===undefined)
+				record.improvementChart = Ext.create('Ext.chart.Chart', record.improvementChartConfig);
+		}, 50, undefined, [id]);
+
+		// var prj = value[0].project.ObjectID;
+		// var iteration = _.last(value).id;
+		// var href = "https://rally1.rallydev.com/#/"+prj+"/oiterationstatus?iterationKey="+iteration;
+		// return "<div id='" + id + "'href="+href+" target=_blank></a>";
+		return "<div id='"+id+"'></div>";
 	},
 
 	LinkRenderer: function(value, metaData, record, rowIdx, colIdx, store, view) {
