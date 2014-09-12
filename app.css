@@ -3,6 +3,7 @@
 }
 
 
+
 .iteration-summary tr td {
 	border:1px solid #427BD6;
 	border-collapse: collapse;
@@ -11,7 +12,8 @@
 }
 
 .iteration-summary {
+	height : 100px;
 	border:1px solid #427BD6;
 	border-collapse: collapse;
-	padding : 3px;
+	padding : 10px;
 }
