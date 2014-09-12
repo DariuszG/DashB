@@ -198,7 +198,7 @@ Ext.define('CustomApp', {
                     text: 'Team', dataIndex: 'team'
                 },
                 {
-                    text: 'Last 4 Sprints', dataIndex: 'summary', renderer : app.renderSummaries, width : 130
+                    text: 'Last 4 Sprints', dataIndex: 'summary', renderer : app.renderSummaries, width : 160
                 },
                 {
                     text: 'Chart', dataIndex: 'summary', renderer : app.renderChart,width : 150, align : "center"
@@ -328,8 +328,16 @@ Ext.define('CustomApp', {
         .app {
   /* Add app styles here */
 }
+.iteration-summary tr td {
+  border: 1px solid #427BD6;
+  border-collapse: collapse;
+  padding: 3px;
+  text-align: center;
+}
 .iteration-summary {
   border: 1px solid #427BD6;
+  border-collapse: collapse;
+  padding: 3px;
 }
 
     </style>
