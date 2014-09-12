@@ -3,104 +3,34 @@ var app = null;
 Ext.define('CustomApp', {
     extend: 'Rally.app.App',
     componentCls: 'app',
-    items:{ html:'<a href="https://help.rallydev.com/apps/2.0rc3/doc/">App SDK 2.0rc3 Docs</a>'},
+    // items:{ html:'<a href="https://help.rallydev.com/apps/2.0rc3/doc/">App SDK 2.0rc3 Docs</a>'},
     launch: function() {
-        //Write app code here
         app = this;
-		app.store = Ext.create('Ext.data.JsonStore', {
-        fields: ['name', 'data1', 'data2', 'data3', 'data4', 'data5'],
-        data: [{
-            'name': 'metric one',
-            'data1': 10,
-            'data2': 12,
-            'data3': 14,
-            'data4': 8,
-            'data5': 13
-        }, {
-            'name': 'metric two',
-            'data1': 7,
-            'data2': 8,
-            'data3': 16,
-            'data4': 10,
-            'data5': 3
-        }, {
-            'name': 'metric three',
-            'data1': 5,
-            'data2': 2,
-            'data3': 14,
-            'data4': 12,
-            'data5': 7
-        }, {
-            'name': 'metric four',
-            'data1': 2,
-            'data2': 14,
-            'data3': 6,
-            'data4': 1,
-            'data5': 23
-        }, {
-            'name': 'metric five',
-            'data1': 4,
-            'data2': 4,
-            'data3': 36,
-            'data4': 13,
-            'data5': 33
-        }]
-    });
-	
-	
-	app.chartConfig= {
-        //renderTo: Ext.getBody(),
-        width: 100,
-        height: 100,
-        animate: true,
-        store: app.store,
-        axes: [{
-            type: 'Numeric',
-            position: 'left',
-            fields: ['data1', 'data2'],
-            label: {
-                renderer: Ext.util.Format.numberRenderer('0,0')
-            },
-            
-            grid: true,
-            minimum: 0
-        }, {
-            type: 'Category',
-            position: 'bottom',
-            fields: ['name']
-            
-        }],
-        series: [{
-            type: 'line',
-            highlight: {
-                size: 7,
-                radius: 7
-            },
-            axis: 'left',
-            xField: 'name',
-            yField: 'data1',
-            markerConfig: {
-                type: 'cross',
-                size: 1,
-                radius: 2,
-                'stroke-width': 0
-            }
-        }]
-    };
         app.queryIterations();
     },
 
+    /*
+        queryIteration retrieves all iterations in scope that ended before today and after one 
+        year ago.
+    */
+
     queryIterations : function() {
+
+        var today = new Date();
+        var lastYear = new Date();
+        lastYear.setDate(today.getDate()-365);
+        var todayISO = Rally.util.DateTime.toIsoString(today, false);
+        var lastYearISO = Rally.util.DateTime.toIsoString(lastYear, false);
+        console.log(todayISO,lastYearISO);
 
         var configs = [
             {
                 model  : "Iteration",
                 fetch  : ['Name', 'ObjectID', 'Project', 'StartDate', 'EndDate' ],
-                filters: [ Ext.create('Rally.data.wsapi.Filter', {
-                    property : 'EndDate', 
-                    operator: "<=", 
-                    value: Rally.util.DateTime.toIsoString(new Date(), false)
-                })],
+                filters: [ 
+                    { property : 'EndDate', operator: "<=", value: todayISO },
+                    { property : 'EndDate', operator: ">=", value: lastYearISO }
+                ],
                 sorters: [
                     {
                         property: 'EndDate',
@@ -112,32 +42,66 @@ Ext.define('CustomApp', {
 
         async.map( configs, app.wsapiQuery, function(error,results) {
 
-            console.log(results);
-
-            var eds = _.map( results[0], function(x) { return x.get("EndDate")});
-
-            console.log( _.last(eds,4));
-
-            // console.log("Iteration Results", _.last(_.map(results[0],function(x) { return x.get("EndDate")}),4));
-            var last4iterations = _.last(results[0],4);
-
-            app.iterationData( last4iterations, function(error,results){
-
-                // 
-                console.log("iteration data",results);
-
-            });
-
-
-
-        })
+				/*
+					We group the iterations by project (team), and then get metrics for the last four iterations 
+					for each team.
+				*/
+				var iterationsRaw = results[0];
+				var prjRefs = _.map(results[0],function(iter)
+				{
+					return iter.get("Project").ObjectID;
+				});
+				
+				var uniqPrjRefs = _.uniq(prjRefs);
+				console.log("prjRefs=", uniqPrjRefs);
+				
+				var querConfigs = _.map(uniqPrjRefs,function(p) {
+					return{
+						model:"Project",
+						fetch: ["TeamMembers"],
+						filters: [{property:"ObjectID",value:p}]
+					};
+				});
+				async.map(querConfigs, app.wsapiQuery, function(err, results) {
+				
+					var flatTM = _.flatten(results);
+					var flatNotEmptyTM = _.filter(flatTM, function(prj) { return prj.get("TeamMembers").Count > 0; });
+					var uniqPrjIdTM = _.map(flatNotEmptyTM, function(val) { 
+						return val.get("ObjectID");
+					});
+					var inerNoEmptyTM = _.filter(iterationsRaw, function(iter) { return _.contains(uniqPrjIdTM, iter.get("Project").ObjectID );});
+					console.log("inerNoEmptyTM=",inerNoEmptyTM);
+				
+					var groupedByProject = _.groupBy(inerNoEmptyTM,function(r) { return r.get("Project").Name;});
+					var teams = _.keys(groupedByProject);
+					var teamLastIterations = _.map( _.values(groupedByProject), function(gbp) {
+						return _.last(gbp,4);
+					});	
+					/*
+					Get the iteration data for each set of up to 4 iterations.
+					*/
+					async.map( teamLastIterations, app.iterationData, function(error,results) {
+						app.teamResults = _.map(results, function(result,i) { 
+							return {
+								team : teams[i],
+								summary : results[i]
+							};
+						});
+						// create the table with the summary data.
+						app.addTable(app.teamResults);
+					});
+				});
+			});
     },
 
+    /*
+        Retrieves the iteration metrics (iterationcumulativeflowdata) for each set of iterations
+    */
     iterationData : function( iterations, callback) {
 
+        // create a set of wsapi query configs from the iterations
         var configs = _.map( iterations, function(iteration) {
             return {
-
                 model  : "IterationCumulativeFlowData",
                 fetch  : ['CardEstimateTotal','CardState','CreationDate'],
                 filters: [ Ext.create('Rally.data.wsapi.Filter', {
@@ -148,76 +112,78 @@ Ext.define('CustomApp', {
             };
         });
 
-        console.log("Configs:",configs);
-
+        // once we have the metrics data we do some gymnastics to calculate the committed and accepted values
         async.map( configs, app.wsapiQuery, function(error,results) {
 
             var summaries = [];
 
             _.each(results,function(iterationRecords, index){ 
 
-                var groupedByDate = _.groupBy(iterationRecords,function(ir) { return ir.get("CreationDate")});
+			console.log("Interation Records=",iterationRecords);
+			if(iterationRecords.length >0)
+			{
+                // group the metrics by date, 
+                var groupedByDate = _.groupBy(iterationRecords,function(ir) { return ir.get("CreationDate");});
 
-                // console.log(groupedByDate);
                 var iterationDates = _.keys(groupedByDate);
                 iterationDates = _.sortBy(iterationDates,function(d) {
                     return Rally.util.DateTime.fromIsoString(d);
                 });
-                // console.log(iterationDates);
+
                 var firstDayRecs = groupedByDate[_.first(iterationDates)];
                 var lastDayRecs = groupedByDate[_.last(iterationDates)];
+				if((firstDayRecs.length>0) && (lastDayRecs.length>0))
+				{
+					var committed = _.reduce( firstDayRecs, function(memo,val) { 
+						return memo + (val.get("CardEstimateTotal") !== null ? val.get("CardEstimateTotal") : 0);
+					}, 0 );
 
-                console.log("first",firstDayRecs);
-                console.log("last",lastDayRecs);
+					var accepted = _.reduce( lastDayRecs, function(memo,val) { 
 
-                var committed = _.reduce( firstDayRecs, function(memo,val) { 
-                    return memo + (val.get("CardEstimateTotal") !== null ? val.get("CardEstimateTotal") : 0);
-                }, 0 );
+						var estimate = val.get("CardEstimateTotal");
+						var done = val.get("CardState") === "Accepted" || val.get("CardState") === "Released";
 
-                var accepted = _.reduce( lastDayRecs, function(memo,val) { 
+						return memo + ( done && !_.isNull(estimate) ) ? estimate : 0;
+					}, 0 );
 
-                    var estimate = val.get("CardEstimateTotal");
-                    var done = val.get("CardState") === "Accepted" || val.get("CardState") === "Released";
+					summaries.push( { 
 
-                    return memo + ( done && !_.isNull(estimate) ) ? estimate : 0;
-                }, 0 );
+						project : iterations[index].get("Project"),
+						iteration : iterations[index].get("Name"),
+						id : firstDayRecs[0].get("IterationObjectID"),
+						committed : Math.round(committed),
+						accepted : Math.round(accepted)
 
-                summaries.push( { 
+					});
+				}
+			}
+				});
 
-                    iteration : iterations[index].get("Name"),
-                    id : iterations[index].get("ObjectID"),
-                    committed : committed,
-                    accepted : accepted
-
-                });
-            })
-
-            console.log("summaries",summaries);
-
-            app.addTable(summaries);
+				callback(null,summaries);
+			
 
         });
 
     },
 
-    addTable : function(summaries) {
+    addTable : function(teamResults) {
 
         var grid = Ext.create('Rally.ui.grid.Grid', {
             store: Ext.create('Rally.data.custom.Store', {
-                data: [ {
-                    "summaries" : summaries
-                }
-                ]
+                data: teamResults
             }),
             columnCfgs: [
                 {
-                    text: 'Last 4 Sprints', dataIndex: 'summaries', renderer : app.renderSummaries
+                    text: 'Team', dataIndex: 'team'
                 },
-				{
-                    text: 'Last Sprint Link', dataIndex: 'summaries', renderer : app.LinkRenderer
+                // {
+                    // text: 'Last Sprint Link', dataIndex: 'summary', renderer : app.LinkRenderer
+                // },
+                {
+                    text: 'Last 4 Sprints', dataIndex: 'summary', renderer : app.renderSummaries, width : 200
                 },
-				{
-                    text: 'Sparkline', dataIndex: 'summaries', renderer : app.SparklineRenderer
+                {
+                    text: 'Chart', dataIndex: 'summary', renderer : app.renderChart,width : 150, align : "center"
                 }
             ]
         });
@@ -226,17 +192,86 @@ Ext.define('CustomApp', {
 
     },
 
-    renderSummaries: function(value, metaData, record, rowIdx, colIdx, store, view) {
+    renderChart: function(value, metaData, record, rowIdx, colIdx, store, view) {
+
+        var data = _.map( value, function (v,i) {
+            var drec =  { 
+                acceptedPercent : v.committed > 0 ? Math.round((v.accepted / v.committed) * 100) : 0,
+                index : i+1
+            };
+            return drec;
+        });
+        
+        record.chartStore = Ext.create('Ext.data.JsonStore', {
+            fields: ['index','acceptedPercent'],
+            data: data
+        });
+
+        record.chartConfig = 
+        {
+            width: 100,
+            height: 100,
+            axes: [{
+                type: 'Numeric',
+                position: 'left',
+                fields: ['acceptedPercent'],
+                label: {
+                    renderer: Ext.util.Format.numberRenderer('0,0')
+                },
+                grid: true
+                // minimum: 0,
+                // maximum: 200
+            }, {
+                type: 'Category',
+                position: 'bottom',
+                fields: ['index']
+            }],
+            series: [
+                {
+                    type: 'line',
+                    highlight: {
+                        size: 2,
+                        radius: 2
+                    },
+                    axis: 'left',
+                    xField: 'index',
+                    yField: 'acceptedPercent'
+                }
+            ]
+        };
+
+        var id = Ext.id();
+        Ext.defer(function (id) {
+            record.chartConfig.renderTo = id;
+            record.chartConfig.store = record.chartStore;
+            if (record.chart===undefined) 
+                record.chart = Ext.create('Ext.chart.Chart', record.chartConfig);
+        }, 50, undefined, [id]);
+		var prj = value[0].project.ObjectID;
+		var iteration = _.last(value).id;
+		var href = "https://rally1.rallydev.com/#/"+prj+"/oiterationstatus?iterationKey="+iteration;
+		return "<a id='" + id + "'href="+href+" target=_blank></a>";
+    },
+
+    LinkRenderer: function(value, metaData, record, rowIdx, colIdx, store, view) {
         console.log("value",value,record);
-        return "<table height=200>" + 
+        var workspace=app.getContext().getProject().ObjectID;
+        var lastSprintId= _.last(value).id;
+        console.log("workspace=",workspace, "lastSid=", lastSprintId);
+        return "<a href='https://rally1.rallydev.com/#/"+workspace+"/oiterationstatus?iterationKey="+lastSprintId+"' target='_blank'>Last one</a>";
+    },
+
+    renderSummaries: function(value, metaData, record, rowIdx, colIdx, store, view) {
+        return "<table class='iteration-summary'>" + 
             "<tr>" + 
+            "<td>Committed</td>" +
             "<td>" + value[0].committed + "</td>" +
             "<td>" + value[1].committed + "</td>" +
             "<td>" + value[2].committed + "</td>" +
             "<td>" + value[3].committed + "</td>" +
-			
             "</tr>" +
             "<tr>" + 
+            "<td>Accepted</td>" +
             "<td>" + value[0].accepted + "</td>" +
             "<td>" + value[1].accepted + "</td>" +
             "<td>" + value[2].accepted + "</td>" +
@@ -245,26 +280,6 @@ Ext.define('CustomApp', {
             "</table>";
     },
 
-	LinkRenderer: function(value, metaData, record, rowIdx, colIdx, store, view) {
-        console.log("value",value,record);
-		var workspace=app.getContext().getProject().ObjectID;
-		
-		var lastSprintId= _.last(value).id;
-		console.log("workspace=",workspace, "lastSid=", lastSprintId);
-        return "<a href='https://rally1.rallydev.com/#/"+workspace+"/oiterationstatus?iterationKey="+lastSprintId+"' target='_blank'>Last one</a>";
-    },
-	SparklineRenderer: function(value, metaData, record, rowIdx, colIdx, store, view) {
-
-        var id = Ext.id();
-        Ext.defer(function (id) {
-            app.chartConfig.renderTo = id;
-            var chart = Ext.create('Ext.chart.Chart', app.chartConfig);
-        }, 50, undefined, [id]);
-
-        return "<div id='" + id + "'></div>";
-    },
-
-	
     wsapiQuery : function( config , callback ) {
 
         Ext.create('Rally.data.WsapiDataStore', {
