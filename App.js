@@ -47,6 +47,8 @@ Ext.define('CustomApp', {
                 for each team.
             */
 
+            console.log(_.map(results[0],function(r) { return r.get("Project")}));
+
             var groupedByProject = _.groupBy(results[0],function(r) { return r.get("Project")["Name"]});
             var teams = _.keys(groupedByProject);
             var teamLastIterations = _.map( _.values(groupedByProject), function(gbp) {
@@ -97,41 +99,39 @@ Ext.define('CustomApp', {
                 // group the metrics by date, 
                 var groupedByDate = _.groupBy(iterationRecords,function(ir) { return ir.get("CreationDate")});
 
+                // get the dates, and sort
                 var iterationDates = _.keys(groupedByDate);
                 iterationDates = _.sortBy(iterationDates,function(d) {
                     return Rally.util.DateTime.fromIsoString(d);
                 });
 
+                // assign the first day and last day records
                 var firstDayRecs = groupedByDate[_.first(iterationDates)];
                 var lastDayRecs = groupedByDate[_.last(iterationDates)];
 
+                // committed is the sum of all points for the first day
                 var committed = _.reduce( firstDayRecs, function(memo,val) { 
                     return memo + (val.get("CardEstimateTotal") !== null ? val.get("CardEstimateTotal") : 0);
                 }, 0 );
 
+                // accepted is the sum of points for cardstate Accepted or Released
                 var accepted = _.reduce( lastDayRecs, function(memo,val) { 
-
                     var estimate = val.get("CardEstimateTotal");
                     var done = val.get("CardState") === "Accepted" || val.get("CardState") === "Released";
-
                     return memo + ( done && !_.isNull(estimate) ) ? estimate : 0;
                 }, 0 );
 
                 summaries.push( { 
-
                     project : iterations[index].get("Project"),
                     iteration : iterations[index].get("Name"),
-                    id : firstDayRecs[0].get("IterationObjectID"),
+                    id : iterations[index].get("ObjectID"),
                     committed : committed,
                     accepted : accepted
-
                 });
             })
 
             callback(null,summaries);
-
         });
-
     },
 
     addTable : function(teamResults) {
@@ -161,7 +161,7 @@ Ext.define('CustomApp', {
     },
 
     renderChart: function(value, metaData, record, rowIdx, colIdx, store, view) {
-
+        console.log("value",value);
         var data = _.map( value, function (v,i) {
             var drec =  { 
                 acceptedPercent : v.committed > 0 ? (v.accepted / v.committed) * 100 : 0,
@@ -196,6 +196,11 @@ Ext.define('CustomApp', {
             }],
             series: [
                 {
+                    listeners : {
+                        itemclick : function(a,b,c) { 
+                            console.log("test",this,a,b,c);
+                        }
+                    },
                     type: 'line',
                     highlight: {
                         size: 2,
@@ -203,9 +208,16 @@ Ext.define('CustomApp', {
                     },
                     axis: 'left',
                     xField: 'index',
-                    yField: 'acceptedPercent'
+                    yField: 'acceptedPercent',
+                    markerConfig: {
+                        type: 'cross',
+                        size: 2,
+                        radius: 2,
+                        'stroke-width': 0
+                    }
                 }
-            ]
+            ],
+
         }
 
         var id = Ext.id();
@@ -216,7 +228,12 @@ Ext.define('CustomApp', {
                 record.chart = Ext.create('Ext.chart.Chart', record.chartConfig);
         }, 50, undefined, [id]);
 
-        return "<div id='" + id + "'></div>";
+        var project = value[0].project.ObjectID;
+        var iteration = _.last(value).id;
+        var href = "https://rally1.rallydev.com/#/"+project+"/oiterationstatus?iterationKey="+iteration;
+        console.log("project",project,"iteration",iteration,"href",href);
+        // return "<div id='" + id + "'></div>";
+        return "<a id='" + id + "' href="+href+" target=_blank></a>";
     },
 
     LinkRenderer: function(value, metaData, record, rowIdx, colIdx, store, view) {
