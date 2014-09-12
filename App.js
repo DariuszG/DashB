@@ -23,7 +23,6 @@ Ext.define('CustomApp', {
 		lastYear.setDate(today.getDate()-365);
 		var todayISO = Rally.util.DateTime.toIsoString(today, false);
 		var lastYearISO = Rally.util.DateTime.toIsoString(lastYear, false);
-		console.log(todayISO,lastYearISO);
 
 		var configs = [
 			{
@@ -55,13 +54,11 @@ Ext.define('CustomApp', {
 			});
 			var uniqPrjRefs = _.uniq(prjRefs);
 
-			console.log("prjRefs=", uniqPrjRefs);
-
 			var querConfigs = _.map(uniqPrjRefs,function(p) {
 				return{
-								model:"Project",
-								fetch: ["TeamMembers"],
-								filters: [{property:"ObjectID",value:p}]
+					model:"Project",
+					fetch: ["TeamMembers"],
+					filters: [{property:"ObjectID",value:p}]
 				};
 			});
 
@@ -73,7 +70,6 @@ Ext.define('CustomApp', {
 				});
 
 				var inerNoEmptyTM = _.filter(iterationsRaw, function(iter) { return _.contains(uniqPrjIdTM, iter.get("Project").ObjectID );});
-				console.log("inerNoEmptyTM=",inerNoEmptyTM);
 
 				var groupedByProject = _.groupBy(inerNoEmptyTM,function(r) { return r.get("Project").Name;});
 				var teams = _.keys(groupedByProject);
@@ -85,13 +81,13 @@ Ext.define('CustomApp', {
 				Get the iteration data for each set of up to 4 iterations.
 				*/
 
-				async.map( teamLastIterations, app.iterationData, function(error,results) {
-
+				async.map( teamLastIterations, app.teamData, function(error,results) {
+					console.log("teamData",results);
 					app.teamResults = _.map(results, function(result,i) {
-									return {
-													team : teams[i],
-													summary : results[i]
-									};
+						return {
+							team : teams[i],
+							summary : results[i][0]
+						};
 					});
 					// create the table with the summary data.
 					app.addTable(app.teamResults);
@@ -100,11 +96,28 @@ Ext.define('CustomApp', {
 		});
 	},
 
+
+    /*
+        Called for each team to return the iteration and improvements data records
+    */
+    teamData : function( iterations, callback) {
+
+        app.iterationsData( iterations, function(x,iterationResults) {
+            app.improvementsData( iterations,function(err,improvementResults) {
+                callback(null,[iterationResults,improvementResults]);
+            });
+        });
+
+    },
+
+    improvementsData : function( iterations, callback) {
+        // callback(null,[]);
+    },
+
 	/*
 		Retrieves the iteration metrics (iterationcumulativeflowdata) for each set of iterations
 	*/
-
-	iterationData : function( iterations, callback) {
+	iterationsData : function( iterations, callback) {
 		// create a set of wsapi query configs from the iterations
 
 		var configs = _.map( iterations, function(iteration) {
@@ -123,7 +136,6 @@ Ext.define('CustomApp', {
 		async.map( configs, app.wsapiQuery, function(error,results) {
 			var summaries = [];
 			_.each(results,function(iterationRecords, index) {
-				console.log("Interation Records=",iterationRecords);
 				if(iterationRecords.length >0) {
 					// group the metrics by date,
 					var groupedByDate = _.groupBy(iterationRecords,function(ir) { return ir.get("CreationDate");});
@@ -229,12 +241,9 @@ Ext.define('CustomApp', {
 		return "<a id='" + id + "'href="+href+" target=_blank></a>";
 	},
 
- 
-
 	LinkRenderer: function(value, metaData, record, rowIdx, colIdx, store, view) {
 		var workspace=app.getContext().getProject().ObjectID;
 		var lastSprintId= _.last(value).id;
-		console.log("workspace=",workspace, "lastSid=", lastSprintId);
 		return "<a href='https://rally1.rallydev.com/#/"+workspace+"/oiterationstatus?iterationKey="+lastSprintId+"' target='_blank'>Last one</a>";
 	},
 

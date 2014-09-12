@@ -5,7 +5,7 @@
    "sdk": "2.0rc3",
    "javascript": [
       "App.js",
-      "lib/async.js"
+      "https://cdnjs.cloudflare.com/ajax/libs/async/1.22/async.min.js"
    ],
    "css": [
       "app.css"
