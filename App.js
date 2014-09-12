@@ -6,68 +6,13 @@ Ext.define('CustomApp', {
     // items:{ html:'<a href="https://help.rallydev.com/apps/2.0rc3/doc/">App SDK 2.0rc3 Docs</a>'},
     launch: function() {
         app = this;
-        
-
-
-    app.chartConfig = 
-        {
-            // renderTo: Ext.getBody(),
-            width: 100,
-            height: 100,
-            animate: true,
-            store: app.gridStore,
-            axes: [{
-                type: 'Numeric',
-                position: 'left',
-                fields: ['data1', 'data2'],
-                label: {
-                    renderer: Ext.util.Format.numberRenderer('0,0')
-                },
-                title: 'Sample Values',
-                grid: true,
-                minimum: 0
-            }, {
-                type: 'Category',
-                position: 'bottom',
-                fields: ['name'],
-                title: 'Sample Metrics'
-            }],
-            series: [{
-                type: 'line',
-                highlight: {
-                    size: 7,
-                    radius: 7
-                },
-                axis: 'left',
-                xField: 'name',
-                yField: 'data1',
-                // markerConfig: {
-                //     type: 'cross',
-                //     size: 1,
-                //     radius: 1,
-                //     'stroke-width': 0
-                // }
-            }, {
-                type: 'line',
-                highlight: {
-                    size: 7,
-                    radius: 7
-                },
-                axis: 'left',
-                fill: true,
-                xField: 'name',
-                yField: 'data2',
-                // markerConfig: {
-                //     type: 'circle',
-                //     size: 1,
-                //     radius: 1,
-                //     'stroke-width': 0
-                // }
-            }]
-        }
-
         app.queryIterations();
     },
+
+    /*
+        queryIteration retrieves all iterations in scope that ended before today and after one 
+        year ago.
+    */
 
     queryIterations : function() {
 
@@ -97,14 +42,20 @@ Ext.define('CustomApp', {
 
         async.map( configs, app.wsapiQuery, function(error,results) {
 
+            /*
+                We group the iterations by project (team), and then get metrics for the last four iterations 
+                for each team.
+            */
+
             var groupedByProject = _.groupBy(results[0],function(r) { return r.get("Project")["Name"]});
-
             var teams = _.keys(groupedByProject);
-
             var teamLastIterations = _.map( _.values(groupedByProject), function(gbp) {
                 return _.last(gbp,4);
             });
 
+            /*
+                Get the iteration data for each set of up to 4 iterations.
+            */
             async.map( teamLastIterations, app.iterationData, function(error,results) {
                 app.teamResults = _.map(results, function(result,i) { 
                     return {
@@ -112,16 +63,20 @@ Ext.define('CustomApp', {
                         summary : results[i]
                     }
                 });
+                // create the table with the summary data.
                 app.addTable(app.teamResults);
             });
         })
     },
 
+    /*
+        Retrieves the iteration metrics (iterationcumulativeflowdata) for each set of iterations
+    */
     iterationData : function( iterations, callback) {
 
+        // create a set of wsapi query configs from the iterations
         var configs = _.map( iterations, function(iteration) {
             return {
-
                 model  : "IterationCumulativeFlowData",
                 fetch  : ['CardEstimateTotal','CardState','CreationDate'],
                 filters: [ Ext.create('Rally.data.wsapi.Filter', {
@@ -132,12 +87,14 @@ Ext.define('CustomApp', {
             };
         });
 
+        // once we have the metrics data we do some gymnastics to calculate the committed and accepted values
         async.map( configs, app.wsapiQuery, function(error,results) {
 
             var summaries = [];
 
             _.each(results,function(iterationRecords, index){ 
 
+                // group the metrics by date, 
                 var groupedByDate = _.groupBy(iterationRecords,function(ir) { return ir.get("CreationDate")});
 
                 var iterationDates = _.keys(groupedByDate);
@@ -188,6 +145,9 @@ Ext.define('CustomApp', {
                     text: 'Team', dataIndex: 'team'
                 },
                 {
+                    text: 'Last Sprint Link', dataIndex: 'summary', renderer : app.LinkRenderer
+                },
+                {
                     text: 'Last 4 Sprints', dataIndex: 'summary', renderer : app.renderSummaries, width : 160
                 },
                 {
@@ -207,7 +167,6 @@ Ext.define('CustomApp', {
                 acceptedPercent : v.committed > 0 ? (v.accepted / v.committed) * 100 : 0,
                 index : i+1,
             }
-            console.log(drec);
             return drec;
         });
         
@@ -255,12 +214,17 @@ Ext.define('CustomApp', {
             record.chartConfig.store = record.chartStore;
             if (record.chart===undefined) 
                 record.chart = Ext.create('Ext.chart.Chart', record.chartConfig);
-
-            // if (record.chart!==undefined) record.chart.destroy();
-            // record.chart = Ext.create('Ext.chart.Chart', record.chartConfig);
         }, 50, undefined, [id]);
 
         return "<div id='" + id + "'></div>";
+    },
+
+    LinkRenderer: function(value, metaData, record, rowIdx, colIdx, store, view) {
+        console.log("value",value,record);
+        var workspace=app.getContext().getProject().ObjectID;
+        var lastSprintId= _.last(value).id;
+        console.log("workspace=",workspace, "lastSid=", lastSprintId);
+        return "<a href='https://rally1.rallydev.com/#/"+workspace+"/oiterationstatus?iterationKey="+lastSprintId+"' target='_blank'>Last one</a>";
     },
 
     renderSummaries: function(value, metaData, record, rowIdx, colIdx, store, view) {
