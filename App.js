@@ -243,6 +243,8 @@ Ext.define('CustomApp', {
 				if(iterationRecords.length >0) {
 					// group the metrics by date,
 					var groupedByDate = _.groupBy(iterationRecords,function(ir) { return ir.get("CreationDate");});
+
+					var churnRatio = app.churnRatio(_.values(groupedByDate));
 					var iterationDates = _.keys(groupedByDate);
 					iterationDates = _.sortBy(iterationDates,function(d) {
 						return Rally.util.DateTime.fromIsoString(d);
@@ -264,7 +266,8 @@ Ext.define('CustomApp', {
 							iteration : iterations[index].get("Name"),
 							id : firstDayRecs[0].get("IterationObjectID"),
 							committed : Math.round(committed),
-							accepted : Math.round(accepted)
+							accepted : Math.round(accepted),
+							churnRatio : churnRatio
 						});
 					};
 				}
@@ -282,10 +285,23 @@ Ext.define('CustomApp', {
 				{ text: 'Team', dataIndex: 'team' },
 				{ text: 'Last 4 Sprints', dataIndex: 'summary', renderer : app.renderSummaries, width : 200 },
 				{ text: '% Accepted Chart', dataIndex: 'summary', renderer : app.renderAcceptedChart,width : 150, align : "center" },
-				{ text: '% Improvement Chart', dataIndex: 'summary', renderer : app.renderImprovementChart,width : 150, align : "center" }
+				{ text: '% Improvement Chart', dataIndex: 'summary', renderer : app.renderImprovementChart,width : 150, align : "center" },
+				{ text: 'Churn Ratio Chart', dataIndex: 'summary', renderer : app.renderChurnChart,width : 150, align : "center" }
 			]
 		});
 		app.add(grid);
+	},
+
+	// Returns the std dev when passed an array of arrays of daily cumulative flow recs
+	churnRatio : function ( arrDailyRecs ) {
+
+		var dailyTotals = _.map( arrDailyRecs, function(recs) {
+			return _.reduce(recs,function(memo,r) { return memo + r.get("CardEstimateTotal");},0)
+		});
+		var dailyAverage = _.mean(dailyTotals);
+		var stdDev = _.stdDeviation(dailyTotals);
+		return dailyAverage > 0 ? Math.round((stdDev / dailyAverage) *100) : 0;
+
 	},
 
 	renderAcceptedChart: function(value, metaData, record, rowIdx, colIdx, store, view) {
@@ -298,12 +314,17 @@ Ext.define('CustomApp', {
 			return drec;
 		});
 
+
+
 		record.chartStore = Ext.create('Ext.data.JsonStore', {
 			fields: ['index','acceptedPercent','targetPercent'],
 			data: data
 		});
 
 		record.chartConfig = {
+			style : {
+				// backgroundColor : 'red'
+			},
 			width: 100,
 			height: 100,
 			axes: [{
@@ -353,6 +374,7 @@ Ext.define('CustomApp', {
 		Ext.defer(function (id) {
 			record.chartConfig.renderTo = id;
 			record.chartConfig.store = record.chartStore;
+			// record.chartConfig.style.backgroundColor = "yellow";	
 			if (record.chart===undefined)
 				record.chart = Ext.create('Ext.chart.Chart', record.chartConfig);
 		}, 50, undefined, [id]);
@@ -415,10 +437,60 @@ Ext.define('CustomApp', {
 				record.improvementChart = Ext.create('Ext.chart.Chart', record.improvementChartConfig);
 		}, 50, undefined, [id]);
 
-		// var prj = value[0].project.ObjectID;
-		// var iteration = _.last(value).id;
-		// var href = "https://rally1.rallydev.com/#/"+prj+"/oiterationstatus?iterationKey="+iteration;
-		// return "<div id='" + id + "'href="+href+" target=_blank></a>";
+		return "<div id='"+id+"'></div>";
+	},
+
+	renderChurnChart: function(value, metaData, record, rowIdx, colIdx, store, view) {
+		var data = _.map( value, function (v,i) {
+			return {
+				churnRatio : v.churnRatio,
+				index : i+1
+			};
+		});
+
+		record.churnChartStore = Ext.create('Ext.data.JsonStore', {
+			fields: ['index','churnRatio'],
+			data: data
+		});
+
+		record.churnChartConfig = {
+			width: 100,
+			height: 100,
+			axes: [{
+				type: 'Numeric',
+				position: 'left',
+				fields: ['churnRatio'],
+				label: {
+					renderer: Ext.util.Format.numberRenderer('0,0')
+				},
+				grid: true
+			}, {
+				type: 'Category',
+				position: 'bottom',
+				fields: ['index']
+			}],
+			series: [
+				{
+					type: 'line',
+					highlight: {
+						size: 2,
+						radius: 2
+					},
+					axis: 'left',
+					xField: 'index',
+					yField: 'churnRatio'
+				}
+			]
+		};
+
+		var id = Ext.id();
+		Ext.defer(function (id) {
+			record.churnChartConfig.renderTo = id;
+			record.churnChartConfig.store = record.churnChartStore;
+			if (record.churnChart===undefined)
+				record.churnChart = Ext.create('Ext.chart.Chart', record.churnChartConfig);
+		}, 50, undefined, [id]);
+
 		return "<div id='"+id+"'></div>";
 	},
 

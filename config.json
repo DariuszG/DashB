@@ -5,7 +5,8 @@
    "sdk": "2.0rc3",
    "javascript": [
       "App.js",
-      "https://cdnjs.cloudflare.com/ajax/libs/async/1.22/async.min.js"
+      "https://cdnjs.cloudflare.com/ajax/libs/async/1.22/async.min.js",
+      "lib/lodash.math.js"
    ],
    "css": [
       "app.css"
