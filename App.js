@@ -1,5 +1,14 @@
 var app = null;
 
+// var o = {
+// 	c : function() {
+// 		console.log("c",c);
+// 	},
+// 	a : {
+// 		b : this.c
+// 	}
+// }
+
 Ext.define('CustomApp', {
 
 	extend: 'Rally.app.App',
@@ -15,6 +24,29 @@ Ext.define('CustomApp', {
 
 	getSettingsFields: function() {
         var values = [
+            {
+                name: 'showAcceptanceRateMetric',
+                xtype: 'rallycheckboxfield',
+                label : "Show Accepted .v. Commit %"
+            },
+            {
+                name: 'showImprovementRateMetric',
+                xtype: 'rallycheckboxfield',
+                label : "Show Improvement work as % of Scope"
+            },
+            {
+                name: 'showChurnRateMetric',
+                xtype: 'rallycheckboxfield',
+                label : "Show Churn Ratio (std dev of scope divided by average daily scope)"
+            },
+
+            {
+                name: 'useLateAcceptanceRate',
+                xtype: 'rallycheckboxfield',
+                label : "use Late Accepted value for Acceptance Ratio"
+            },
+
+
             {
                 name: 'commitAcceptRatio',
                 xtype: 'rallytextfield',
@@ -37,9 +69,13 @@ Ext.define('CustomApp', {
 
     config: {
         defaultSettings : {
+        	showAcceptanceRateMetric : true,
+        	showImprovementRateMetric : false,
+        	showChurnRateMetric : true,
             commitAcceptRatio : 75,
             continuousImprovementRangeMin : 5,
-            continuousImprovementRangeMax : 10
+            continuousImprovementRangeMax : 10,
+            useLateAcceptanceRate : true
         }
     },
 
@@ -141,7 +177,7 @@ Ext.define('CustomApp', {
 
     allIterationItems : function( iterations, callback) {
 
-        var configs = _.map( iterations, function(iteration) {
+        var storyConfigs = _.map( iterations, function(iteration) {
 			return {
 				model  : "HierarchicalRequirement",
 				fetch  : ['ObjectID','PlanEstimate','Name','FormattedID','Project','ScheduleState'],
@@ -154,20 +190,47 @@ Ext.define('CustomApp', {
 			};
 		});
 
-		async.map( configs, app.wsapiQuery, function(error,results) {
-			var allData = [];
-			_.each(results,function(allStories) {
-				var allIterationData = {
-					totalScope : _.reduce(allStories, function(memo,r) {
-						return memo + (r.get("PlanEstimate")!==null  ? r.get("PlanEstimate") : 0)
-					},0),
-					lateAccepted : _.reduce(allStories, function(memo,r) {
-						return memo + app.acceptedValue(r);
-					},0)
-				}
-				allData.push(allIterationData);
-			});				
-			callback(null,allData);
+        var defectConfigs = _.map( iterations, function(iteration) {
+			return {
+				model  : "HierarchicalRequirement",
+				fetch  : ['ObjectID','PlanEstimate','Name','FormattedID','Project','ScheduleState'],
+				filters: [ {
+						property : 'Iteration.ObjectID',
+						operator: "=",
+						value: iteration.get("ObjectID")
+					}
+				]
+			};
+		});
+
+		async.map( storyConfigs, app.wsapiQuery, function(error,storyResults) {
+			async.map( defectConfigs, app.wsapiQuery, function(error,defectResults) {
+				var allData = [];
+				_.each(iterations,function(iteration,x) {
+					var iterationArtifacts = storyResults[x].concat(defectResults[x]);
+					var allIterationData = {
+						totalScope : _.reduce(iterationArtifacts, function(memo,r) {
+							return memo + (r.get("PlanEstimate")!==null  ? r.get("PlanEstimate") : 0)
+						},0),
+						lateAccepted : _.reduce(iterationArtifacts, function(memo,r) {
+							return memo + app.acceptedValue(r);
+						},0)
+					}
+					allData.push(allIterationData);
+				});
+				// _.each(storyResults.concat(defectResults),function(allStories) {
+				// 	var allIterationData = {
+				// 		totalScope : _.reduce(allStories, function(memo,r) {
+				// 			return memo + (r.get("PlanEstimate")!==null  ? r.get("PlanEstimate") : 0)
+				// 		},0),
+				// 		lateAccepted : _.reduce(allStories, function(memo,r) {
+				// 			return memo + app.acceptedValue(r);
+				// 		},0)
+				// 	}
+				// 	allData.push(allIterationData);
+				// });				
+				callback(null,allData);
+			});
 		});
     },
 
@@ -276,20 +339,59 @@ Ext.define('CustomApp', {
 		});
 	},
 
+	defineChartColumns : function() {
+
+		app.acceptanceRateColumn = {
+			text: '% Accepted Chart', 
+			dataIndex: 'summary', 
+			renderer : app.renderAcceptedChart,
+			width : 150, 
+			align : "center"
+		};
+
+		app.improvementRateColumn = { 
+			text: '% Improvement Chart', 
+			dataIndex: 'summary', 
+			renderer : app.renderImprovementChart,
+			width : 150, 
+			align : "center" 
+		};
+
+		app.churnRateColumn = { 
+			text: 'Churn Ratio Chart', 
+			dataIndex: 'summary', 
+			renderer : app.renderChurnChart,
+			width : 150, 
+			align : "center" 
+		};
+
+	},
+
 	addTable : function(teamResults) {
+
+		app.defineChartColumns();
+
+		var columnCfgs = [
+			{ text: 'Team', dataIndex: 'team' },
+			{ text: 'Last 4 Sprints', dataIndex: 'summary', renderer : app.renderSummaries, width : 200 },
+		];
+
+		if (app.getSetting("showAcceptanceRateMetric")===true)
+			columnCfgs.push(app.acceptanceRateColumn);
+		if (app.getSetting("showImprovementRateMetric")===true)
+			columnCfgs.push(app.improvementRateColumn);
+		if (app.getSetting("showChurnRateMetric")===true)
+			columnCfgs.push(app.churnRateColumn);
+
 		var grid = Ext.create('Rally.ui.grid.Grid', {
 			store: Ext.create('Rally.data.custom.Store', {
 				data: teamResults
 			}),
-			columnCfgs: [
-				{ text: 'Team', dataIndex: 'team' },
-				{ text: 'Last 4 Sprints', dataIndex: 'summary', renderer : app.renderSummaries, width : 200 },
-				{ text: '% Accepted Chart', dataIndex: 'summary', renderer : app.renderAcceptedChart,width : 150, align : "center" },
-				{ text: '% Improvement Chart', dataIndex: 'summary', renderer : app.renderImprovementChart,width : 150, align : "center" },
-				{ text: 'Churn Ratio Chart', dataIndex: 'summary', renderer : app.renderChurnChart,width : 150, align : "center" }
-			]
+			columnCfgs: columnCfgs
 		});
+
 		app.add(grid);
+
 	},
 
 	// Returns the std dev when passed an array of arrays of daily cumulative flow recs
@@ -306,15 +408,15 @@ Ext.define('CustomApp', {
 
 	renderAcceptedChart: function(value, metaData, record, rowIdx, colIdx, store, view) {
 		var data = _.map( value, function (v,i) {
+			var acceptedToken = app.getSetting("useLateAcceptanceRate") === true ? "lateAccepted" : "accepted";
+
 			var drec =  {
-				acceptedPercent : v.committed > 0 ? Math.round((v.accepted / v.committed) * 100) : 0,
+				acceptedPercent : v.committed > 0 ? Math.round((v[acceptedToken] / v.committed) * 100) : 0,
 				targetPercent : app.getSetting("commitAcceptRatio"),
 				index : i+1
 			};
 			return drec;
 		});
-
-
 
 		record.chartStore = Ext.create('Ext.data.JsonStore', {
 			fields: ['index','acceptedPercent','targetPercent'],
@@ -501,22 +603,19 @@ Ext.define('CustomApp', {
 	},
 
 	renderSummaries: function(value, metaData, record, rowIdx, colIdx, store, view) {
-		return "<table class='iteration-summary'>" +
-			"<tr>" +
-			"<td>Committed</td>" +
-			"<td>" + value[0].committed + "</td>" +
-			"<td>" + value[1].committed + "</td>" +
-			"<td>" + value[2].committed + "</td>" +
-			"<td>" + value[3].committed + "</td>" +
+
+		var s = 
+		"<table class='iteration-summary'>" +
+			"<tr><td>Committed</td>" +
+			_.map(value,function(v){ return '<td>'+v.committed+'</td>' }).join('') +
+			"</tr>"+
+			"<tr><td>Accepted</td>" +
+			_.map(value,function(v){ return '<td>'+v.accepted+'</td>' }).join('') +
 			"</tr>" +
-			"<tr>" +
-			"<td>Accepted</td>" +
-			"<td>" + value[0].accepted + "</td>" +
-			"<td>" + value[1].accepted + "</td>" +
-			"<td>" + value[2].accepted + "</td>" +
-			"<td>" + value[3].accepted + "</td>" +
-			"</tr>" +
-			"</table>";
+			"<tr><td>Late Accepted</td>" +
+			_.map(value,function(v){ return '<td>'+v.lateAccepted+'</td>' }).join('') +
+			"</tr></table>"
+		return s;
 	},
 
 	wsapiQuery : function( config , callback ) {
