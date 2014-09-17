@@ -1,29 +1,26 @@
 var app = null;
 
-// var o = {
-// 	c : function() {
-// 		console.log("c",c);
-// 	},
-// 	a : {
-// 		b : this.c
-// 	}
-// }
-
 Ext.define('CustomApp', {
 
 	extend: 'Rally.app.App',
 
 	componentCls: 'app',
 
-	// items:{ html:'<a href="https://help.rallydev.com/apps/2.0rc3/doc/">App SDK 2.0rc3 Docs</a>'},
-
 	launch: function() {
 		app = this;
+		console.log(_.isNumber(app.getSetting("numberSprints")));
+		app.numberSprints = app.getSetting("numberSprints");
 		app.queryIterations();
 	},
 
 	getSettingsFields: function() {
         var values = [
+            {
+		        name: 'numberSprints',
+                xtype: 'rallytextfield',
+                label : "Number of sprints to report on."
+            },
+
             {
                 name: 'showAcceptanceRateMetric',
                 xtype: 'rallycheckboxfield',
@@ -45,8 +42,6 @@ Ext.define('CustomApp', {
                 xtype: 'rallycheckboxfield',
                 label : "use Late Accepted value for Acceptance Ratio"
             },
-
-
             {
                 name: 'commitAcceptRatio',
                 xtype: 'rallytextfield',
@@ -69,8 +64,9 @@ Ext.define('CustomApp', {
 
     config: {
         defaultSettings : {
+        	numberSprints : 5,
         	showAcceptanceRateMetric : true,
-        	showImprovementRateMetric : false,
+        	showImprovementRateMetric : true,
         	showChurnRateMetric : true,
             commitAcceptRatio : 75,
             continuousImprovementRangeMin : 5,
@@ -139,10 +135,14 @@ Ext.define('CustomApp', {
 
 				var groupedByProject = _.groupBy(inerNoEmptyTM,function(r) { return r.get("Project").Name;});
 				var teams = _.keys(groupedByProject);
+				// var teamLastIterations = _.map( _.values(groupedByProject), function(gbp) {
+				// 				return _.last(gbp,4);
+				// });          
 				var teamLastIterations = _.map( _.values(groupedByProject), function(gbp) {
-								return _.last(gbp,4);
+					return _.last(gbp,app.numberSprints);
 				});          
 
+				console.log(teamLastIterations);
 				/*
 				Get the iteration data for each set of up to 4 iterations.
 				*/
@@ -218,17 +218,6 @@ Ext.define('CustomApp', {
 					}
 					allData.push(allIterationData);
 				});
-				// _.each(storyResults.concat(defectResults),function(allStories) {
-				// 	var allIterationData = {
-				// 		totalScope : _.reduce(allStories, function(memo,r) {
-				// 			return memo + (r.get("PlanEstimate")!==null  ? r.get("PlanEstimate") : 0)
-				// 		},0),
-				// 		lateAccepted : _.reduce(allStories, function(memo,r) {
-				// 			return memo + app.acceptedValue(r);
-				// 		},0)
-				// 	}
-				// 	allData.push(allIterationData);
-				// });				
 				callback(null,allData);
 			});
 		});
@@ -406,10 +395,57 @@ Ext.define('CustomApp', {
 
 	},
 
+	// assumes the category series is the first element eg. ['index','acceptedPercent'] etc.
+	createChartConfig : function(series) {
+
+		return {
+			style : {
+				// backgroundColor : 'red'
+			},
+			width: 100,
+			height: 100,
+			axes: [{
+				type: 'Numeric',
+				position: 'left',
+				fields: [series[1]],
+				label: {
+					renderer: Ext.util.Format.numberRenderer('0,0')
+				},
+				grid: true
+			}, {
+				type: 'Category',
+				position: 'bottom',
+				fields: [series[0]]
+			}],
+			series: _.map(_.rest(series),function(s,x) {
+				var config =  {
+					type: 'line',
+					highlight: {
+						size: 2,
+						radius: 2
+					},
+					axis: 'left',
+					xField: series[0],
+					yField: s
+				}
+				if (x>0) {
+					config.markerConfig = { 
+    	                type: 'circle',
+		                size: 1,
+                		radius: 0
+                	}
+				}
+				return config;
+			})
+		};
+	},
+
 	renderAcceptedChart: function(value, metaData, record, rowIdx, colIdx, store, view) {
+		
+		var fields = ['index','acceptedPercent','targetPercent'];
+
 		var data = _.map( value, function (v,i) {
 			var acceptedToken = app.getSetting("useLateAcceptanceRate") === true ? "lateAccepted" : "accepted";
-
 			var drec =  {
 				acceptedPercent : v.committed > 0 ? Math.round((v[acceptedToken] / v.committed) * 100) : 0,
 				targetPercent : app.getSetting("commitAcceptRatio"),
@@ -419,58 +455,11 @@ Ext.define('CustomApp', {
 		});
 
 		record.chartStore = Ext.create('Ext.data.JsonStore', {
-			fields: ['index','acceptedPercent','targetPercent'],
+			fields: fields,
 			data: data
 		});
 
-		record.chartConfig = {
-			style : {
-				// backgroundColor : 'red'
-			},
-			width: 100,
-			height: 100,
-			axes: [{
-				type: 'Numeric',
-				position: 'left',
-				fields: ['acceptedPercent'],
-				label: {
-					renderer: Ext.util.Format.numberRenderer('0,0')
-				},
-				grid: true
-			}, {
-				type: 'Category',
-				position: 'bottom',
-				fields: ['index']
-			}],
-			series: [
-				{
-					type: 'line',
-					highlight: {
-						size: 2,
-						radius: 2
-					},
-					axis: 'left',
-					xField: 'index',
-					yField: 'acceptedPercent'
-				},
-				{
-					type: 'line',
-					style: {
-		                //stroke: "red"
-		                stroke: '#ff0000',
-		                fill: '#ff0000'
-		            },
-		            markerConfig: { 
-    	                type: 'circle',
-		                size: 1,
-                		radius: 1,
-					},
-					axis: 'left',
-					xField: 'index',
-					yField: 'targetPercent'
-				}
-			]
-		};
+		record.chartConfig = app.createChartConfig(fields);
 
 		var id = Ext.id();
 		Ext.defer(function (id) {
@@ -488,6 +477,9 @@ Ext.define('CustomApp', {
 	},
 
 	renderImprovementChart: function(value, metaData, record, rowIdx, colIdx, store, view) {
+
+		var fields = ['index','improvementPercent'];
+
 		var data = _.map( value, function (v,i) {
 			var drec =  {
 				improvementPercent : v.totalScope > 0 ? Math.round((v.totalImprovementPoints / v.totalScope) * 100) : 0,
@@ -497,39 +489,11 @@ Ext.define('CustomApp', {
 		});
 
 		record.improvementChartStore = Ext.create('Ext.data.JsonStore', {
-			fields: ['index','improvementPercent'],
+			fields: fields,
 			data: data
 		});
 
-		record.improvementChartConfig = {
-			width: 100,
-			height: 100,
-			axes: [{
-				type: 'Numeric',
-				position: 'left',
-				fields: ['improvementPercent'],
-				label: {
-					renderer: Ext.util.Format.numberRenderer('0,0')
-				},
-				grid: true
-			}, {
-				type: 'Category',
-				position: 'bottom',
-				fields: ['index']
-			}],
-			series: [
-				{
-					type: 'line',
-					highlight: {
-						size: 2,
-						radius: 2
-					},
-					axis: 'left',
-					xField: 'index',
-					yField: 'improvementPercent'
-				}
-			]
-		};
+		record.improvementChartConfig = app.createChartConfig(fields);
 
 		var id = Ext.id();
 		Ext.defer(function (id) {
@@ -543,6 +507,9 @@ Ext.define('CustomApp', {
 	},
 
 	renderChurnChart: function(value, metaData, record, rowIdx, colIdx, store, view) {
+
+		var fields = ['index','churnRatio'];
+
 		var data = _.map( value, function (v,i) {
 			return {
 				churnRatio : v.churnRatio,
@@ -551,39 +518,11 @@ Ext.define('CustomApp', {
 		});
 
 		record.churnChartStore = Ext.create('Ext.data.JsonStore', {
-			fields: ['index','churnRatio'],
+			fields: fields,
 			data: data
 		});
 
-		record.churnChartConfig = {
-			width: 100,
-			height: 100,
-			axes: [{
-				type: 'Numeric',
-				position: 'left',
-				fields: ['churnRatio'],
-				label: {
-					renderer: Ext.util.Format.numberRenderer('0,0')
-				},
-				grid: true
-			}, {
-				type: 'Category',
-				position: 'bottom',
-				fields: ['index']
-			}],
-			series: [
-				{
-					type: 'line',
-					highlight: {
-						size: 2,
-						radius: 2
-					},
-					axis: 'left',
-					xField: 'index',
-					yField: 'churnRatio'
-				}
-			]
-		};
+		record.churnChartConfig = app.createChartConfig(fields);
 
 		var id = Ext.id();
 		Ext.defer(function (id) {
@@ -603,7 +542,6 @@ Ext.define('CustomApp', {
 	},
 
 	renderSummaries: function(value, metaData, record, rowIdx, colIdx, store, view) {
-
 		var s = 
 		"<table class='iteration-summary'>" +
 			"<tr><td>Committed</td>" +
