@@ -18,7 +18,6 @@ Ext.define('CustomApp', {
 
 	launch: function() {
 		app = this;
-		console.log(_.isNumber(app.getSetting("numberSprints")));
 		app.numberSprints = app.getSetting("numberSprints");
 		app.queryIterations();
 	},
@@ -45,6 +44,21 @@ Ext.define('CustomApp', {
                 name: 'showChurnRateMetric',
                 xtype: 'rallycheckboxfield',
                 label : "Show Churn Ratio (std dev of scope divided by average daily scope)"
+            },
+            {
+                name: 'showPercentEstimatedMetric',
+                xtype: 'rallycheckboxfield',
+                label : "Show Percentage of stories with a plan estimate metric"
+            },
+            {
+                name: 'showTaskChurnRateMetric',
+                xtype: 'rallycheckboxfield',
+                label : "Show Task Churn Ratio (std dev of task scope divided by average daily scope)"
+            },
+            {
+                name: 'showDailyInProgressMetric',
+                xtype: 'rallycheckboxfield',
+                label : "Show average daily percentage of work that is In-Progress"
             },
 
             {
@@ -74,14 +88,17 @@ Ext.define('CustomApp', {
 
     config: {
         defaultSettings : {
-        	numberSprints : 5,
+        	numberSprints : 4,
         	showAcceptanceRateMetric : true,
         	showImprovementRateMetric : true,
         	showChurnRateMetric : true,
+        	showPercentEstimatedMetric : true,
+        	showTaskChurnRateMetric : true,
+        	showDailyInProgressMetric : true,
             commitAcceptRatio : 75,
             continuousImprovementRangeMin : 5,
             continuousImprovementRangeMax : 10,
-            useLateAcceptanceRate : true
+            useLateAcceptanceRate : false
         }
     },
 
@@ -119,6 +136,7 @@ Ext.define('CustomApp', {
 			We group the iterations by project (team), and then get metrics for the last four iterations
 			for each team.
 		*/
+			console.log("Read",results[0].length,"Iterations");
 			var iterationsRaw = results[0];
 			var prjRefs = _.map(results[0],function(iter)
 			{
@@ -145,18 +163,13 @@ Ext.define('CustomApp', {
 
 				var groupedByProject = _.groupBy(inerNoEmptyTM,function(r) { return r.get("Project").Name;});
 				var teams = _.keys(groupedByProject);
-				// var teamLastIterations = _.map( _.values(groupedByProject), function(gbp) {
-				// 				return _.last(gbp,4);
-				// });          
 				var teamLastIterations = _.map( _.values(groupedByProject), function(gbp) {
 					return _.last(gbp,app.numberSprints);
 				});          
 
-				console.log(teamLastIterations);
 				/*
 				Get the iteration data for each set of up to 4 iterations.
 				*/
-
 				async.map( teamLastIterations, app.teamData, function(error,results) {
 					app.teamResults = _.map(results, function(result,i) {
 						return {
@@ -224,7 +237,12 @@ Ext.define('CustomApp', {
 						},0),
 						lateAccepted : _.reduce(iterationArtifacts, function(memo,r) {
 							return memo + app.acceptedValue(r);
-						},0)
+						},0),
+						percentEstimated : iterationArtifacts.length > 0 ? 
+							(	_.filter(iterationArtifacts,function(artifact) {
+									return (artifact.get("PlanEstimate") !== null && artifact.get("PlanEstimate") > 0);
+								}).length / iterationArtifacts.length * 100)
+							  : 0
 					}
 					allData.push(allIterationData);
 				});
@@ -289,7 +307,7 @@ Ext.define('CustomApp', {
 		var configs = _.map( iterations, function(iteration) {
 			return {
 				model  : "IterationCumulativeFlowData",
-				fetch  : ['CardEstimateTotal','CardState','CreationDate'],
+				fetch  : ['CardEstimateTotal','CardState','CreationDate','TaskEstimateTotal'],
 				filters: [ Ext.create('Rally.data.wsapi.Filter', {
 					property : 'IterationObjectID',
 					operator: "=",
@@ -307,7 +325,9 @@ Ext.define('CustomApp', {
 					var groupedByDate = _.groupBy(iterationRecords,function(ir) { return ir.get("CreationDate");});
 
 					var churnRatio = app.churnRatio(_.values(groupedByDate));
+					var taskChurnRatio = app.taskChurnRatio(_.values(groupedByDate));
 					var iterationDates = _.keys(groupedByDate);
+					var dailyInProgressRate = app.dailyInProgressRate(_.values(groupedByDate));
 					iterationDates = _.sortBy(iterationDates,function(d) {
 						return Rally.util.DateTime.fromIsoString(d);
 					});
@@ -329,13 +349,54 @@ Ext.define('CustomApp', {
 							id : firstDayRecs[0].get("IterationObjectID"),
 							committed : Math.round(committed),
 							accepted : Math.round(accepted),
-							churnRatio : churnRatio
+							churnRatio : churnRatio,
+							taskChurnRatio : taskChurnRatio,
+							dailyInProgressRate : dailyInProgressRate
 						});
 					};
 				}
 			});
 			callback(null,summaries);
 		});
+	},
+
+
+	// Returns the std dev when passed an array of arrays of daily cumulative flow recs
+	churnRatio : function ( arrDailyRecs ) {
+
+		var dailyTotals = _.map( arrDailyRecs, function(recs) {
+			return _.reduce(recs,function(memo,r) { return memo + r.get("CardEstimateTotal");},0)
+		});
+		var dailyAverage = _.mean(dailyTotals);
+		var stdDev = _.stdDeviation(dailyTotals);
+		return dailyAverage > 0 ? Math.round((stdDev / dailyAverage) *100) : 0;
+
+	},
+
+	// Returns the std dev when passed an array of arrays of daily cumulative flow recs
+	taskChurnRatio : function ( arrDailyRecs ) {
+
+		var dailyTotals = _.map( arrDailyRecs, function(recs) {
+			return _.reduce(recs,function(memo,r) { return memo + r.get("TaskEstimateTotal");},0)
+		});
+		var dailyAverage = _.mean(dailyTotals);
+		var stdDev = _.stdDeviation(dailyTotals);
+		return dailyAverage > 0 ? Math.round((stdDev / dailyAverage) *100) : 0;
+
+	},
+
+	// average daily in progress rate (based on points)
+	dailyInProgressRate : function( arrDailyRecs ) {
+
+		var dailyInProgressRates = _.map( arrDailyRecs, function(recs) {
+			var dailyTotal = _.reduce(recs,function(memo,r) { return memo + r.get("CardEstimateTotal");},0);
+			var dailyInProgress = _.reduce(recs,function(memo,r) { 
+				return memo + (r.get("CardState") === "In-Progress" ? r.get("CardEstimateTotal") : 0);
+			},0);
+			return (dailyTotal > 0 ? (( dailyInProgress / dailyTotal ) * 100 ) : 0);
+		});
+		return _.mean(dailyInProgressRates);
+
 	},
 
 	defineChartColumns : function() {
@@ -364,6 +425,30 @@ Ext.define('CustomApp', {
 			align : "center" 
 		};
 
+		app.percentEstimatedColumn = { 
+			text: 'Percent Estimated Chart', 
+			dataIndex: 'summary', 
+			renderer : app.renderPercentEstimatedChart,
+			width : 150, 
+			align : "center" 
+		};
+
+		app.taskChurnRateColumn = { 
+			text: 'Task Churn Rate', 
+			dataIndex: 'summary', 
+			renderer : app.renderTaskChurnRateChart,
+			width : 150, 
+			align : "center" 
+		};
+
+		app.dailyInProgressColumn = { 
+			text: 'Average Daily In-Progress % Rate', 
+			dataIndex: 'summary', 
+			renderer : app.renderDailyInProgressChart,
+			width : 150, 
+			align : "center" 
+		};
+
 	},
 
 	addTable : function(teamResults) {
@@ -371,7 +456,7 @@ Ext.define('CustomApp', {
 		app.defineChartColumns();
 
 		var columnCfgs = [
-			{ text: 'Team', dataIndex: 'team' },
+			{ text: 'Team', dataIndex: 'team', renderer : app.renderTeamName },
 			{ text: 'Last 4 Sprints', dataIndex: 'summary', renderer : app.renderSummaries, width : 200 },
 		];
 
@@ -381,6 +466,12 @@ Ext.define('CustomApp', {
 			columnCfgs.push(app.improvementRateColumn);
 		if (app.getSetting("showChurnRateMetric")===true)
 			columnCfgs.push(app.churnRateColumn);
+		if (app.getSetting("showPercentEstimatedMetric")===true)
+			columnCfgs.push(app.percentEstimatedColumn);
+		if (app.getSetting("showTaskChurnRateMetric")===true)
+			columnCfgs.push(app.taskChurnRateColumn);
+		if (app.getSetting("showDailyInProgressMetric")===true)
+			columnCfgs.push(app.dailyInProgressColumn);
 
 		var grid = Ext.create('Rally.ui.grid.Grid', {
 			store: Ext.create('Rally.data.custom.Store', {
@@ -393,17 +484,101 @@ Ext.define('CustomApp', {
 
 	},
 
-	// Returns the std dev when passed an array of arrays of daily cumulative flow recs
-	churnRatio : function ( arrDailyRecs ) {
 
-		var dailyTotals = _.map( arrDailyRecs, function(recs) {
-			return _.reduce(recs,function(memo,r) { return memo + r.get("CardEstimateTotal");},0)
+	renderTeamName: function(value, metaData, record, rowIdx, colIdx, store, view) {
+		// return "Team " + rowIdx;
+		return value;
+	},
+
+	renderAcceptedChart: function(value, metaData, record, rowIdx, colIdx, store, view) {
+
+		var acceptedToken = app.getSetting('useLateAcceptanceRate') === true ? 'lateAccepted' : 'accepted';
+
+		var data = _.map( value, function (v,i) {
+			
+			var drec =  {
+				acceptedPercent : v.committed > 0 ? Math.round((v[acceptedToken] / v.committed) * 100) : 0,
+				targetPercent : app.getSetting("commitAcceptRatio"),
+				index : i+1
+			};
+			return drec;
 		});
-		var dailyAverage = _.mean(dailyTotals);
-		var stdDev = _.stdDeviation(dailyTotals);
-		return dailyAverage > 0 ? Math.round((stdDev / dailyAverage) *100) : 0;
+
+		var id = app.renderChart(record,data,['index','acceptedPercent','targetPercent'],'AcceptedPercent');
+		var prj = value[0].project.ObjectID;
+		var iteration = _.last(value).id;
+		var href = "https://rally1.rallydev.com/#/"+prj+"/oiterationstatus?iterationKey="+iteration;
+		return "<a id='" + id + "'href="+href+" target=_blank></a>";
+	},
+
+	renderImprovementChart: function(value, metaData, record, rowIdx, colIdx, store, view) {
+
+		var id = app.renderChart(record,value,['index','improvementPercent'],'ImprovementRatio');
+		return "<div id='"+id+"'></div>";
 
 	},
+
+	renderChurnChart: function(value, metaData, record, rowIdx, colIdx, store, view) {
+
+		var id = app.renderChart(record,value,['index','churnRatio'],'ChurnRatio');
+		return "<div id='"+id+"'></div>";
+
+	},
+
+	renderTaskChurnRateChart: function(value, metaData, record, rowIdx, colIdx, store, view) {
+
+		var id = app.renderChart(record,value,['index','taskChurnRatio'],'TaskChurnRatio');
+		return "<div id='"+id+"'></div>";
+
+	},
+
+	renderPercentEstimatedChart: function(value, metaData, record, rowIdx, colIdx, store, view) {
+
+		var id = app.renderChart(record,value,['index','percentEstimated'],'PercentEstimated');
+		return "<div id='"+id+"'></div>";
+	},
+
+	renderDailyInProgressChart: function(value, metaData, record, rowIdx, colIdx, store, view) {
+
+		var id = app.renderChart(record,value,['index','dailyInProgressRate'],'DailyInProgressRate');
+		return "<div id='"+id+"'></div>";
+	},
+
+
+	renderChart : function( record, value, fields, chartName ) {
+
+		var data = _.map( value, function (v,i) {
+			var d = {
+				index : i+1
+			}
+			_.each(fields,function(f) { 
+				if (f!=="index")
+					d[f] = _.isUndefined(v[f]) ? 0 : v[f];
+			});
+			return d;
+		});
+
+		var chartStore = Ext.create('Ext.data.JsonStore', {
+			fields: fields,
+			data: data
+		});
+
+		var chartConfig = app.createChartConfig(fields);
+
+		var id = Ext.id();
+		Ext.defer(function (id,chartStore,chartConfig,record) {
+			record.chartConfig = _.isUndefined(record.chartConfig) ? {} : record.chartConfig;
+			record.chart = _.isUndefined(record.chart) ? {} : record.chart;
+			record.chartConfig[chartName] = chartConfig;
+			record.chartConfig[chartName].renderTo = id;
+			record.chartConfig[chartName].store = chartStore;
+			if (record.chart[chartName]===undefined)
+				record.chart[chartName] = Ext.create('Ext.chart.Chart', chartConfig);
+		}, 50, undefined, [id,chartStore,chartConfig,record]);
+
+		return id;
+	},
+
 
 	// assumes the category series is the first element eg. ['index','acceptedPercent'] etc.
 	createChartConfig : function(series) {
@@ -450,101 +625,6 @@ Ext.define('CustomApp', {
 		};
 	},
 
-	renderAcceptedChart: function(value, metaData, record, rowIdx, colIdx, store, view) {
-		
-		var fields = ['index','acceptedPercent','targetPercent'];
-
-		var data = _.map( value, function (v,i) {
-			var acceptedToken = app.getSetting("useLateAcceptanceRate") === true ? "lateAccepted" : "accepted";
-			var drec =  {
-				acceptedPercent : v.committed > 0 ? Math.round((v[acceptedToken] / v.committed) * 100) : 0,
-				targetPercent : app.getSetting("commitAcceptRatio"),
-				index : i+1
-			};
-			return drec;
-		});
-
-		record.chartStore = Ext.create('Ext.data.JsonStore', {
-			fields: fields,
-			data: data
-		});
-
-		record.chartConfig = app.createChartConfig(fields);
-
-		var id = Ext.id();
-		Ext.defer(function (id) {
-			record.chartConfig.renderTo = id;
-			record.chartConfig.store = record.chartStore;
-			// record.chartConfig.style.backgroundColor = "yellow";	
-			if (record.chart===undefined)
-				record.chart = Ext.create('Ext.chart.Chart', record.chartConfig);
-		}, 50, undefined, [id]);
-
-		var prj = value[0].project.ObjectID;
-		var iteration = _.last(value).id;
-		var href = "https://rally1.rallydev.com/#/"+prj+"/oiterationstatus?iterationKey="+iteration;
-		return "<a id='" + id + "'href="+href+" target=_blank></a>";
-	},
-
-	renderImprovementChart: function(value, metaData, record, rowIdx, colIdx, store, view) {
-
-		var fields = ['index','improvementPercent'];
-
-		var data = _.map( value, function (v,i) {
-			var drec =  {
-				improvementPercent : v.totalScope > 0 ? Math.round((v.totalImprovementPoints / v.totalScope) * 100) : 0,
-				index : i+1
-			};
-			return drec;
-		});
-
-		record.improvementChartStore = Ext.create('Ext.data.JsonStore', {
-			fields: fields,
-			data: data
-		});
-
-		record.improvementChartConfig = app.createChartConfig(fields);
-
-		var id = Ext.id();
-		Ext.defer(function (id) {
-			record.improvementChartConfig.renderTo = id;
-			record.improvementChartConfig.store = record.improvementChartStore;
-			if (record.improvementChart===undefined)
-				record.improvementChart = Ext.create('Ext.chart.Chart', record.improvementChartConfig);
-		}, 50, undefined, [id]);
-
-		return "<div id='"+id+"'></div>";
-	},
-
-	renderChurnChart: function(value, metaData, record, rowIdx, colIdx, store, view) {
-
-		var fields = ['index','churnRatio'];
-
-		var data = _.map( value, function (v,i) {
-			return {
-				churnRatio : v.churnRatio,
-				index : i+1
-			};
-		});
-
-		record.churnChartStore = Ext.create('Ext.data.JsonStore', {
-			fields: fields,
-			data: data
-		});
-
-		record.churnChartConfig = app.createChartConfig(fields);
-
-		var id = Ext.id();
-		Ext.defer(function (id) {
-			record.churnChartConfig.renderTo = id;
-			record.churnChartConfig.store = record.churnChartStore;
-			if (record.churnChart===undefined)
-				record.churnChart = Ext.create('Ext.chart.Chart', record.churnChartConfig);
-		}, 50, undefined, [id]);
-
-		return "<div id='"+id+"'></div>";
-	},
-
 	LinkRenderer: function(value, metaData, record, rowIdx, colIdx, store, view) {
 		var workspace=app.getContext().getProject().ObjectID;
 		var lastSprintId= _.last(value).id;
@@ -555,13 +635,13 @@ Ext.define('CustomApp', {
 		var s = 
 		"<table class='iteration-summary'>" +
 			"<tr><td>Committed</td>" +
-			_.map(value,function(v){ return '<td>'+v.committed+'</td>' }).join('') +
+			_.map(value,function(v){ return '<td>'+Math.round(v.committed)+'</td>' }).join('') +
 			"</tr>"+
 			"<tr><td>Accepted</td>" +
-			_.map(value,function(v){ return '<td>'+v.accepted+'</td>' }).join('') +
+			_.map(value,function(v){ return '<td>'+Math.round(v.accepted)+'</td>' }).join('') +
 			"</tr>" +
 			"<tr><td>Late Accepted</td>" +
-			_.map(value,function(v){ return '<td>'+v.lateAccepted+'</td>' }).join('') +
+			_.map(value,function(v){ return '<td>'+Math.round(v.lateAccepted)+'</td>' }).join('') +
 			"</tr></table>"
 		return s;
 	},
