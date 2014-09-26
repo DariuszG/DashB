@@ -215,7 +215,7 @@ Ext.define('CustomApp', {
 
         var defectConfigs = _.map( iterations, function(iteration) {
 			return {
-				model  : "HierarchicalRequirement",
+				model  : "Defect",
 				fetch  : ['ObjectID','PlanEstimate','Name','FormattedID','Project','ScheduleState'],
 				filters: [ {
 						property : 'Iteration.ObjectID',
@@ -244,6 +244,7 @@ Ext.define('CustomApp', {
 								}).length / iterationArtifacts.length * 100)
 							  : 0
 					}
+					console.log("allIterationData",allIterationData);
 					allData.push(allIterationData);
 				});
 				callback(null,allData);
